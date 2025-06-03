@@ -14,22 +14,49 @@
       height: 100px;
     }
     canvas {
-      margin-top: 20px;
+      margin-top: 10px; /* Adjusted margin */
+    }
+    .navigation-controls {
+      margin-top: 10px;
+      margin-bottom: 10px;
+      display: flex;
+      align-items: center;
+      gap: 10px; /* Adds space between buttons and text */
+    }
+    .navigation-controls button {
+      padding: 5px 10px;
+    }
+    #currentEpisodeDisplay {
+      font-weight: bold;
     }
   </style>
 </head>
 <body>
-  <h1>Runningavg Calculator</h1>
-  <p>Paste your rating data below (e.g., <code>g = [83,80,...]</code>):</p>
+  <h1>Movingaverage calculator</h1>
+  <p>Paste your series data below (e.g., <code>g = [83,80,...]</code>):</p>
   <textarea id="inputData">g = [83,80,93,97,96,93,98,98]
 a = [90,87,98,94,82,93,98,95]
 m = [87,91,93,89,87,86,86,98]
 h = [81,83,84,95,95,84,86,83]</textarea>
   <br>
-  <button onclick="generateGraph()">Generate Graph</button>
+  <button onclick="processAndDisplayInitialGraph()">Generate Graph</button>
+
+  <div class="navigation-controls">
+    <button id="prevEpisode" onclick="navigateEpisode('prev')">&lt; Prev</button>
+    <span id="currentEpisodeDisplay">E: N/A</span>
+    <button id="nextEpisode" onclick="navigateEpisode('next')">Next &gt;</button>
+  </div>
+
   <canvas id="ratingChart" width="800" height="400"></canvas>
 
   <script>
+    // --- Global State Variables ---
+    let originalParsedData = {};          // Holds the full dataset, e.g., { g: [80,85], a: [90,92,88] }
+    let currentVisibleEpisodeNumber = 1;  // 1-based index of the episode currently displayed
+    let absoluteMaxEpisodes = 0;          // Max episodes found across all series in the current dataset
+    // window.chartInstance will store the Chart.js object
+
+    // --- Data Parsing and Calculation ( Largely Unchanged ) ---
     function parseData(input) {
       const lines = input.trim().split('\n');
       const data = {};
@@ -37,14 +64,23 @@ h = [81,83,84,95,95,84,86,83]</textarea>
         const match = line.match(/^(.*?)\s*=\s*\[(.*?)\]$/);
         if (match) {
           const key = match[1].trim();
-          const values = match[2].split(',').map(x => parseFloat(x.trim()));
-          data[key] = values;
+          // Ensure empty arrays are handled, and filter out non-numeric if any before parseFloat
+          const valuesString = match[2].trim();
+          if (valuesString === "") {
+            data[key] = [];
+          } else {
+            data[key] = valuesString.split(',')
+                                  .map(x => x.trim())
+                                  .filter(x => x !== "") // handle trailing commas or empty spots
+                                  .map(x => parseFloat(x));
+          }
         }
       });
       return data;
     }
 
-    function movingAverage(arr) {
+    function runningAverage(arr) {
+      if (!arr || arr.length === 0) return [];
       let avg = 0;
       const result = [];
       for (let i = 0; i < arr.length; i++) {
@@ -56,56 +92,131 @@ h = [81,83,84,95,95,84,86,83]</textarea>
 
     function getRandomColor(index) {
       const colors = [
-        'rgba(255, 99, 132, 1)',
-        'rgba(54, 162, 235, 1)',
-        'rgba(255, 206, 86, 1)',
-        'rgba(75, 192, 192, 1)',
-        'rgba(153, 102, 255, 1)',
-        'rgba(255, 159, 64, 1)',
-        'rgba(199, 199, 199, 1)'
+        'rgba(255, 99, 132, 1)', 'rgba(54, 162, 235, 1)', 'rgba(255, 206, 86, 1)',
+        'rgba(75, 192, 192, 1)', 'rgba(153, 102, 255, 1)', 'rgba(255, 159, 64, 1)',
+        'rgba(199, 199, 199, 1)', 'rgba(255, 0, 0, 1)', 'rgba(0, 255, 0, 1)',
+        'rgba(0, 0, 255, 1)', 'rgba(128, 0, 128, 1)', 'rgba(255, 140, 0, 1)',
+        'rgba(0, 255, 255, 1)', 'rgba(255, 105, 180, 1)', 'rgba(128, 128, 0, 1)',
+        'rgba(0, 128, 128, 1)', 'rgba(0, 0, 128, 1)', 'rgba(255, 215, 0, 1)',
+        'rgba(139, 69, 19, 1)', 'rgba(70, 130, 180, 1)'
       ];
       return colors[index % colors.length];
     }
 
-    function generateGraph() {
+    // --- Core Graphing Logic ---
+
+    // Called by "Generate Graph" button or on page load.
+    // Parses raw data, determines max episodes, and sets view to the latest episode.
+    function processAndDisplayInitialGraph() {
       const rawData = document.getElementById('inputData').value;
-      const data = parseData(rawData);
+      originalParsedData = parseData(rawData);
 
-      const maxEpisodes = Math.max(...Object.values(data).map(arr => arr.length));
-      const labels = Array.from({length: maxEpisodes}, (_, i) => i + 1);
+      if (Object.keys(originalParsedData).length === 0) {
+        absoluteMaxEpisodes = 0;
+        currentVisibleEpisodeNumber = 1; // Default to 1 even if no data
+        if (window.chartInstance) window.chartInstance.destroy();
+        document.getElementById('currentEpisodeDisplay').textContent = "E: N/A";
+        document.getElementById('prevEpisode').disabled = true;
+        document.getElementById('nextEpisode').disabled = true;
+        // Optionally, display a "No data" message on the canvas
+        const ctx = document.getElementById('ratingChart').getContext('2d');
+        ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+        ctx.textAlign = "center";
+        ctx.fillText("No data to display. Paste data and click 'Generate Graph'.", ctx.canvas.width / 2, ctx.canvas.height / 2);
+        return;
+      }
 
-      const datasets = Object.entries(data).map(([key, values], index) => {
-        const ma = movingAverage(values);
-        const lastAvg = ma[ma.length - 1];
+      let maxLen = 0;
+      for (const key in originalParsedData) {
+        if (originalParsedData[key].length > maxLen) {
+          maxLen = originalParsedData[key].length;
+        }
+      }
+      absoluteMaxEpisodes = maxLen > 0 ? maxLen : 1; // Ensure at least 1 episode if there's any series data.
+
+      currentVisibleEpisodeNumber = absoluteMaxEpisodes; // Default to showing the latest state
+      updateGraphDisplay();
+    }
+
+    // Redraws the graph based on currentVisibleEpisodeNumber
+    function updateGraphDisplay() {
+      if (Object.keys(originalParsedData).length === 0 && absoluteMaxEpisodes === 0) {
+          // This case should be handled by processAndDisplayInitialGraph, but as a safeguard:
+          document.getElementById('currentEpisodeDisplay').textContent = "E: N/A";
+          document.getElementById('prevEpisode').disabled = true;
+          document.getElementById('nextEpisode').disabled = true;
+          return;
+      }
+      const displayEpisodeTarget = currentVisibleEpisodeNumber; // 1-based
+
+      const xLabels = Array.from({ length: displayEpisodeTarget }, (_, i) => i + 1);
+      const seriesDataForChart = [];
+      const seriesKeys = Object.keys(originalParsedData); // For consistent color assignment
+
+      for (let i = 0; i < seriesKeys.length; i++) {
+        const key = seriesKeys[i];
+        const allRatings = originalParsedData[key];
+        const fullMovingAverage = runningAverage(allRatings);
+
+        const lineDataForGraph = fullMovingAverage.slice(0, displayEpisodeTarget);
+        let valueForLegendAndSort = -Infinity; // Default for series with no data up to this episode
+
+        if (fullMovingAverage.length > 0) {
+          if (displayEpisodeTarget -1 < fullMovingAverage.length) {
+             valueForLegendAndSort = fullMovingAverage[displayEpisodeTarget - 1];
+          } else {
+             valueForLegendAndSort = fullMovingAverage[fullMovingAverage.length - 1]; // Use last available if series ended earlier
+          }
+        }
+        
+        seriesDataForChart.push({
+          key: key,
+          finalAverageAtEpisode: valueForLegendAndSort,
+          movingAverageData: lineDataForGraph,
+          color: getRandomColor(i) // Color based on original order of series in textarea
+        });
+      }
+
+      seriesDataForChart.sort((a, b) => {
+        const valA = (typeof a.finalAverageAtEpisode === 'number' && isFinite(a.finalAverageAtEpisode)) ? a.finalAverageAtEpisode : -Infinity;
+        const valB = (typeof b.finalAverageAtEpisode === 'number' && isFinite(b.finalAverageAtEpisode)) ? b.finalAverageAtEpisode : -Infinity;
+        return valB - valA;
+      });
+
+      const datasets = seriesDataForChart.map(series => {
         return {
-          label: `${key} (${lastAvg})`,
-          data: ma,
-          borderColor: getRandomColor(index),
-          backgroundColor: getRandomColor(index),
+          label: `${series.key} (${(typeof series.finalAverageAtEpisode === 'number' && isFinite(series.finalAverageAtEpisode)) ? series.finalAverageAtEpisode.toFixed(2) : 'N/A'})`,
+          data: series.movingAverageData,
+          borderColor: series.color,
+          backgroundColor: series.color,
           fill: false,
           tension: 0.3
         };
       });
 
       const ctx = document.getElementById('ratingChart').getContext('2d');
-      if (window.chartInstance) window.chartInstance.destroy();
+      if (window.chartInstance) {
+        window.chartInstance.destroy();
+      }
 
       window.chartInstance = new Chart(ctx, {
         type: 'line',
         data: {
-          labels: labels,
+          labels: xLabels,
           datasets: datasets
         },
         options: {
           responsive: true,
+          maintainAspectRatio: true,
           plugins: {
             title: {
               display: true,
-              text: ''
+              text: `(Episode ${displayEpisodeTarget})` // Dynamic title
             },
             legend: {
               display: true,
-              position: 'top'
+              position: 'right',
+              align: 'start'
             }
           },
           scales: {
@@ -124,9 +235,34 @@ h = [81,83,84,95,95,84,86,83]</textarea>
           }
         }
       });
+
+      // Update navigation UI
+      document.getElementById('currentEpisodeDisplay').textContent = `Episode: ${currentVisibleEpisodeNumber}`;
+      document.getElementById('prevEpisode').disabled = currentVisibleEpisodeNumber <= 1;
+      document.getElementById('nextEpisode').disabled = currentVisibleEpisodeNumber >= absoluteMaxEpisodes;
+      
+      // Additional check for absoluteMaxEpisodes itself being 1 (or 0, though handled)
+      if (absoluteMaxEpisodes <= 1) {
+          document.getElementById('prevEpisode').disabled = true;
+          document.getElementById('nextEpisode').disabled = true;
+      }
     }
 
-    window.onload = generateGraph;
+    function navigateEpisode(direction) {
+      if (direction === 'prev' && currentVisibleEpisodeNumber > 1) {
+        currentVisibleEpisodeNumber--;
+        updateGraphDisplay();
+      } else if (direction === 'next' && currentVisibleEpisodeNumber < absoluteMaxEpisodes) {
+        currentVisibleEpisodeNumber++;
+        updateGraphDisplay();
+      }
+    }
+
+
+
+
+    // Initial graph generation on page load
+    window.onload = processAndDisplayInitialGraph;
   </script>
 </body>
 </html>
