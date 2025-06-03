@@ -1,5 +1,5 @@
 # runningavg-calculator
 
-![image](https://github.com/user-attachments/assets/db6898cb-4a07-4191-85c4-f3f1f9fd8400)
+![image](https://github.com/user-attachments/assets/754a875d-248d-4d43-af77-4cdd2c1ad116)
 
 https://altilunium.github.io/runningavg-calculator/
